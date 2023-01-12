@@ -45,8 +45,25 @@ def moving_average(x,
     smoothed = sp.signal.correlate(x,np.ones(w),mode='same')/w
     return smoothed[int(w/2):-int(w/2)]
 
-def get_leg_time(derDf,T,mode='removal',window=0.05):
+def get_leg_time(derDf,T,mode='removal',window=0.05,variable='angle'):
     sign = +1 if mode=='removal' else -1
-    press_times = sp.signal.find_peaks(sign*np.diff(moving_average(angle_part(derDf,'tar'),window=window,T=T)),
-        height=1,distance=10)
+    if variable=='angle': 
+        v = angle_part(derDf,'tar')
+        height = 1
+    elif variable=='straightness': 
+        v = straightness(derDf)
+        height = 0.03
+    press_times = sp.signal.find_peaks(sign*np.diff(moving_average(v,window=window,T=T)),
+        height=height,distance=10)
     return press_times[0]
+
+def insert_length(derDf):
+    L = (np.sqrt((derDf.loc[:,('lab1','x')]**2).values + (derDf.loc[:,('lab1','y')]**2).values))
+    iL = np.max(L)-L
+    return iL
+
+def straightness(derDf):
+    parts = list('tar'+np.array(range(1,4),dtype='str').astype('object'))
+    vec = derDf.loc[:,(parts,('x','y'))].values
+    straightness = (1/2)*np.abs(vec[:,0]*(vec[:,3] - vec[:,5]) + vec[:,2]*(vec[:,5] - vec[:,1]) + vec[:,4]*(vec[:,1] - vec[:,3]))
+    return (-straightness/np.max(straightness))+1
