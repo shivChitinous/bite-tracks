@@ -1,0 +1,5 @@
+DlC models trained on the same video. 
+Video1 350000 iterations but the markers placed inside the ring. 
+Video2 280000 iterations but markers placed on the wavefront or wet/dry interface. 
+Videos are 10 fps. 
+Relevant segment of videos is the first 24-25 seconds (i.e 0-239 or 0-249 frames in the .csv files)
