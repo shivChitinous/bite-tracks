@@ -58,9 +58,13 @@ def get_leg_time(derDf,T,mode='removal',window=0.05,variable='angle'):
     return press_times[0]
 
 def insert_length(derDf):
-    L = (np.sqrt((derDf.loc[:,('lab1','x')]**2).values + (derDf.loc[:,('lab1','y')]**2).values))
+    L = needle_length(derDf)
     iL = np.max(L)-L
     return iL
+
+def needle_length(derDf):
+    L = (np.sqrt((derDf.loc[:,('lab1','x')]**2).values + (derDf.loc[:,('lab1','y')]**2).values))
+    return L
 
 def straightness(derDf):
     parts = list('tar'+np.array(range(1,4),dtype='str').astype('object'))
