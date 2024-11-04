@@ -3,6 +3,7 @@ import scipy as sp
 import pandas as pd
 from scipy import signal
 from scipy.fft import fftshift
+import imageio
 
 def derive(ldf,T,t_bite_start,t_bite_end,ctr='lab3'):
     df = ldf.copy()
@@ -71,3 +72,15 @@ def straightness(derDf):
     vec = derDf.loc[:,(parts,('x','y'))].values
     straightness = (1/2)*np.abs(vec[:,0]*(vec[:,3] - vec[:,5]) + vec[:,2]*(vec[:,5] - vec[:,1]) + vec[:,4]*(vec[:,1] - vec[:,3]))
     return (-straightness/np.max(straightness))+1
+
+def videoExtract(filename, engine='ffmpeg'):
+    video = imageio.get_reader(filename, engine)
+    frames = []
+
+    # Loop through each frame and append it to the list
+    for frame in video:
+        frames.append(np.array(frame))
+
+    # Stack all frames along a new dimension to create a 4D array
+    video_array = np.stack(frames, axis=0)
+    return video_array
