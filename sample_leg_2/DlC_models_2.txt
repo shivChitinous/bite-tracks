@@ -1,4 +1,0 @@
-DlC models trained on free moving mosquito. 
-Check for labels in image markers.png 
-Videos are 30 fps. 
-Relevant segment of videos is the first 0-20 seconds (i.e 0-600 frames == 4-604 excel indexframes in the .csv files)
