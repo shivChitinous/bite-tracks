@@ -4,11 +4,26 @@ import pandas as pd
 from scipy import signal
 from scipy.fft import fftshift
 import imageio
+from scipy.signal import butter, filtfilt, hilbert
+from skimage.measure import label
+from skimage.morphology import opening
+from scipy.stats import skew, kurtosis
+from skimage.filters import threshold_otsu
 
-def derive(ldf,T,t_bite_start,t_bite_end,ctr='lab3'):
+def derive(ldf,T,ctr='lab3',
+           window=0.1, #seconds
+           vel_lim=5, #pixels/second
+           threshold=0.99,
+           grouplabel = 'bite',
+           ):
+    
     df = ldf.copy()
-    #slice out the bite
-    df = df.loc[round(len(df)*t_bite_start/T):round(len(df)*t_bite_end/T)-1,:].copy()
+    vel_ctr = np.sqrt((((ldf.loc[:,(ctr,
+                'x')].diff())**2).values)+(((ldf.loc[:,(ctr,
+                'y')].diff())**2).values))
+    df[grouplabel] = label(moving_average((vel_ctr <= vel_lim) | np.isnan(vel_ctr), window=window, T=T) >= threshold)
+
+
     for part in sorted(set(list(list(zip(*ldf.columns))[0])),key=list(list(zip(*ldf.columns)))[0].index):
         df.loc[:,(part,'speed')] = 0
         df.loc[:,(part,'norm_speed')] = 0
@@ -19,6 +34,7 @@ def derive(ldf,T,t_bite_start,t_bite_end,ctr='lab3'):
                 'y')].diff())**2).values))
     df.loc[:,(slice(None),('norm_speed'))] = np.array(df.loc[:,(slice(None),
                             ('speed'))]/(df.loc[:,(slice(None),('speed'))].max()))
+    
     return df
 
 def calculate_angle(point_a, point_b):
@@ -38,13 +54,10 @@ def angle_part(legDf, part):
         angle[i] = calculate_angle(ba[i,:],bc[i,:])
     return np.rad2deg(np.unwrap(np.deg2rad(angle)))
 
-def moving_average(x, 
-                   window, #in seconds
-                   T
-                  ):
-    w = int(window*np.shape(x)[0]/T)
-    smoothed = sp.signal.correlate(x,np.ones(w),mode='same')/w
-    return smoothed[int(w/2):-int(w/2)]
+def moving_average(x, window, T):
+    w = int(window * len(x) / T)
+    y = sp.signal.correlate(x, np.ones(w), mode='same') / w
+    return np.where((np.arange(len(x)) < w//2) | (np.arange(len(x)) >= len(x) - w//2), np.nan, y)
 
 def get_leg_time(derDf,T,mode='removal',window=0.05,variable='angle'):
     sign = +1 if mode=='removal' else -1
@@ -59,6 +72,7 @@ def get_leg_time(derDf,T,mode='removal',window=0.05,variable='angle'):
     return press_times[0]
 
 def get_lag_curve(corrDf, signal1= 'straightness', signal2 = 'insert_length'):
+    corrDf = corrDf.copy().interpolate(method='linear', limit_direction='both')
     x = corrDf[signal1] - corrDf[signal1].mean()
     y = corrDf[signal2] - corrDf[signal2].mean()
 
@@ -78,10 +92,13 @@ def get_needle_time(derDf,T,mode='insertion',window=1/25,prominence=10,distance=
     event_times,_ = sp.signal.find_peaks(sign*sp.ndimage.gaussian_filter(-insert_length(derDf), window), prominence = prominence, distance = distance)
     return event_times
 
-def insert_length(derDf):
+def insert_length(derDf, BCthresh = 0.55):
+    
     L = needle_length(derDf)
-    iL = (np.nanmax(L)-L)/np.nanmax(L)
-    return iL
+    BC = (skew(L[~np.isnan(L)])**2 + 1) / kurtosis(L[~np.isnan(L)], fisher=False)  # Calculate the BC value
+    M = threshold_otsu(L[~np.isnan(L)]) if BC>BCthresh else np.nanmax(L)# Otsu's threshold
+    iL = (M-L)/M
+    return -iL #returns negative insertion length for visualization purposes
 
 def needle_length(derDf, likelihood_threshold=0.1):
     L = (np.sqrt((derDf.loc[:,('lab1','x')]**2).values + (derDf.loc[:,('lab1','y')]**2).values))
@@ -131,72 +148,86 @@ def videoExtract(filename, engine='ffmpeg'):
     video_array = np.stack(frames, axis=0)
     return video_array
 
-def estimate_3d_palp_angle(derDf, r=1.0, segment = 1):
-    L1, L2 = np.sqrt(derDf[[('pal1', 'x'), ('pal2', 'x'), ('pal3', 'x')]].diff(axis=1).iloc[:, 1:].values**2 + derDf[[('pal1', 'y'), ('pal2', 'y'), ('pal3', 'y')]].diff(axis=1).iloc[:, 1:].values**2).T
-    L3 = np.sqrt(derDf[[('tar'+str(segment), 'x'), ('tar'+str(segment+1), 'x')]].diff(axis=1).iloc[:,-1].values**2 + derDf[[('tar'+str(segment), 'y'), ('tar'+str(segment+1), 'y')]].diff(axis=1).iloc[:,-1].values**2)
-    Theta = np.deg2rad(angle_part(derDf,'pal'))
-    s1, s2 = np.clip(L1 / (r * L3), -1, 1), np.clip(L2 / (r * L3), -1, 1)
+def estimate_3d_palp_angle(derDf, r=1.0, segment = 2):
+    l1, l2 = np.sqrt(derDf[[('pal1', 'x'), ('pal2', 'x'), ('pal3', 'x')]].diff(axis=1).iloc[:, 1:].values**2 + derDf[[('pal1', 'y'), ('pal2', 'y'), ('pal3', 'y')]].diff(axis=1).iloc[:, 1:].values**2).T
+    T = np.sqrt(derDf[[('tar'+str(segment), 'x'), ('tar'+str(segment+1), 'x')]].diff(axis=1).iloc[:,-1].values**2 + derDf[[('tar'+str(segment), 'y'), ('tar'+str(segment+1), 'y')]].diff(axis=1).iloc[:,-1].values**2)
+    theta = np.deg2rad(angle_part(derDf,'pal'))
+    s1, s2 = np.clip(l1 / (r * T), -1, 1), np.clip(l2 / (r * T), -1, 1)
     c1, c2 = np.sqrt(1 - s1**2), np.sqrt(1 - s2**2)
-    cos_theta = np.clip(c1 * c2 + s1 * s2 * np.cos(Theta), -1, 1)
+    cos_theta = np.clip(c1 * c2 + s1 * s2 * np.cos(theta), -1, 1)
     return np.rad2deg(np.arccos(cos_theta))
 
-def estimte_3d_labial_twist(derDf, segment = 1, lab = 2):
-    L3 = np.sqrt(derDf[[('tar'+str(segment), 'x'), ('tar'+str(segment+1), 'x')]].diff(axis=1).iloc[:,-1].values**2 + derDf[[('tar'+str(segment), 'y'), ('tar'+str(segment+1), 'y')]].diff(axis=1).iloc[:,-1].values**2)
-    L2 = np.sqrt(derDf[[('lab'+str(lab), 'x'), ('lab'+str(lab+1), 'x')]].diff(axis=1).iloc[:, 1].values**2 + derDf[[('lab'+str(lab), 'y'), ('lab'+str(lab+1), 'y')]].diff(axis=1).iloc[:, 1].values**2)/L3
-    L2 = (L2 - np.mean(L2))/(np.max(L2) - np.min(L2)) #center and scale
-    return np.rad2deg(np.arcsin(L2))
+def estimate_3d_labial_twist(derDf, r = 1.2, segment = 2):
+    L1 = derDf[[('lab2', 'x'), ('lab2', 'y')]].values
+    L2 = derDf[[('lab1', 'x'), ('lab1', 'y')]].values - derDf[[('lab2', 'x'), ('lab2', 'y')]].values
+    l1 = np.sqrt(derDf[('lab2', 'x')].values**2 + derDf[('lab2', 'y')].values**2)
+    l2 = np.sqrt((derDf[('lab1', 'x')].values-derDf[('lab2', 'x')].values)**2 + (derDf[('lab1', 'y')].values-derDf[('lab2', 'y')].values)**2)
+    T = np.sqrt(derDf[[('tar'+str(segment), 'x'), ('tar'+str(segment+1), 'x')]].diff(axis=1).iloc[:,-1].values**2 + derDf[[('tar'+str(segment), 'y'), ('tar'+str(segment+1), 'y')]].diff(axis=1).iloc[:,-1].values**2)
+    L = r*T
+    c = 1/(2*L)*np.sqrt(np.abs((L**2 - l1**2 - l2**2)**2 - 4*(l1**2)*(l2**2)))
+    d = np.hstack([((L1 + L2)/2), c[:, np.newaxis]])
+    dmean = np.nanmean(d, axis=0)                      # (3,)
+    phi = np.arccos(np.clip(np.dot(d, dmean) / 
+       (np.linalg.norm(d, axis=1) * np.linalg.norm(dmean)), -1.0, 1.0))
+    return np.rad2deg(phi)
 
-def butterworth_filter_subtract_hilbert_phase(signal, cutoff, fs, order=5):
-    from scipy.signal import butter, filtfilt, hilbert
-    import numpy as np
 
-    # Normalize input
-    signal = (signal - np.nanmin(signal)) / (np.nanmax(signal) - np.nanmin(signal))
+def butter_bandpass(lowcut, highcut, fs, order=4):
+    nyq = 0.5 * fs  # Nyquist Frequency
+    low = lowcut / nyq
+    high = highcut / nyq
+    b, a = butter(order, [low, high], btype='band')
+    return b, a
 
-    # Low-pass filter
-    nyquist = 0.5 * fs
-    normal_cutoff = cutoff / nyquist
-    b, a = butter(order, normal_cutoff, btype='low')
-    filtered = filtfilt(b, a, signal)
+def apply_bandpass_filter(data, lowcut, highcut, fs, order=4):
+    b, a = butter_bandpass(lowcut, highcut, fs, order=order)
+    y = filtfilt(b, a, data)
+    return y
 
-    # Detrend (optional)
-    detrended = signal - filtered
-
-    # Normalize again (optional — may skip)
-    # detrended = (detrended - np.nanmin(detrended)) / (np.nanmax(detrended) - np.nanmin(detrended))
-
-    # Hilbert phase
-    analytic = hilbert(detrended)
-    return np.angle(analytic)
-
-def deltaPhase(corrDf, signal1 = 'pal_angle', signal2 = 'lab_angle', filt_win = 0.01, cutoffHz = 7.5, removal= False, filt_removal = 1, mov_percentile = 50, dir = 'removal'):
-    """
-    Calculate the phase difference between two signals.
-    """
-    fs = len(corrDf)/np.max(corrDf['time [s]'])  # Sampling frequency (Hz)
-    filt_win = round(filt_win * fs) | 1 # Convert window size to samples
-    if removal:
-        removal = straightness_motion(corrDf, filt_removal=filt_removal, mov_percentile=mov_percentile, dir=dir)
+def deltaPhase(corrDf, bandpass = [5, 20], signal1='lab_angle', signal2='pal_angle', removal = False, order = 4, **kwargs):
+    fs = 1/np.median(np.diff(corrDf['time [s]'].values))
+    corrDf = corrDf.copy().interpolate(method='linear', limit_direction='both')
+    if not removal:
+        return np.rad2deg(((np.angle(hilbert(apply_bandpass_filter(corrDf[signal1], bandpass[0], bandpass[1], fs=fs, order = order)))-np.angle(
+            hilbert(apply_bandpass_filter(corrDf[signal2], bandpass[0], bandpass[1], fs=fs, order = order))))-np.pi)%(2*np.pi)-np.pi
+            )
     else:
-        removal = np.ones(len(corrDf), dtype=bool)
-    signal1vals = corrDf[signal1].values[removal]
-    signal2vals = corrDf[signal2].values[removal]
-    dPh = np.rad2deg(sp.signal.medfilt(np.unwrap((butterworth_filter_subtract_hilbert_phase(signal1vals, cutoffHz, 
-                            fs)-butterworth_filter_subtract_hilbert_phase(signal2vals, cutoffHz
-                                                                           , fs))), filt_win)%(2*np.pi))
-    return dPh
-
-def straightness_motion(corrDf, filt_removal=1, mov_percentile=50, dir = 'removal'):
-    from skimage.morphology import opening
-    fs = len(corrDf)/np.max(corrDf['time [s]'])
+        removal = straightness_motion(corrDf, **kwargs)
+        return np.rad2deg(((np.angle(hilbert(apply_bandpass_filter(corrDf[signal1].values[removal], bandpass[0], bandpass[1], fs=fs, order = order)))-np.angle(
+            hilbert(apply_bandpass_filter(corrDf[signal2].values[removal], bandpass[0], bandpass[1], fs=fs, order = order))))-np.pi)%(2*np.pi)-np.pi
+            )
+    
+def straightness_motion(corrDf, filt_removal=1, mov_percentile=50, dir = 'removal', phase = 'late', 
+                        phase_time = 1 #second
+                        ):
+    
+    NaNs = corrDf['bite'] == 0
+    corrDf = corrDf.copy().interpolate(method='linear', limit_direction='both')
+    fs = 1/np.median(np.diff(corrDf['time [s]'].values))
     filt_removal = round(filt_removal * fs) | 1
     if dir == 'insertion': removal = np.diff(sp.signal.medfilt(corrDf['insert_length'], filt_removal), prepend = 0)<np.percentile(np.diff(sp.signal.medfilt(corrDf['insert_length'], filt_removal), prepend=0), mov_percentile)
     elif dir=='removal': removal = np.diff(sp.signal.medfilt(corrDf['insert_length'], filt_removal), prepend = 0)>np.percentile(np.diff(sp.signal.medfilt(corrDf['insert_length'], filt_removal), prepend=0), mov_percentile)
-    return opening(removal, np.array([1]*filt_removal))
+    rem = opening(removal.copy(), np.array([1]*filt_removal))
+    
+    if phase is not None:
+        T = int(phase_time * len(corrDf)/corrDf['time [s]'].max())
+        labels = label(rem)  # Label once
+        for l in np.unique(labels):
+            if l == 0:
+                continue  # 0 is background
+            inds = np.where(labels == l)[0]
+            if phase == 'late':
+                if len(inds) > T:
+                    rem[inds[:len(inds)-T]] = False
+            elif phase == 'early':
+                if T < len(inds):
+                    rem[inds[T:]] = False
+    rem[NaNs] = np.nan  # Restore NaNs
+    return rem
 
-def zoom_str_mot(corrDf, zoomInterval = 0.5, which=1, filt_removal=1, mov_percentile=50, dir = 'removal'):
-    from skimage.measure import label
-    removal = label(straightness_motion(corrDf, filt_removal = filt_removal, mov_percentile=mov_percentile, dir=dir))==which
+def zoom_str_mot(corrDf, zoomInterval = 1, which=1, filt_removal=1, mov_percentile=50, dir = 'removal', phase = 'late', phase_time = 1.5):
+    
+    removal = label(straightness_motion(corrDf, filt_removal = filt_removal, mov_percentile=mov_percentile, dir=dir, phase=phase, phase_time=phase_time))==which
     T = int(zoomInterval * len(corrDf)/corrDf['time [s]'].max())
     if np.sum(removal) > T:
         rem = removal.copy()
@@ -205,3 +236,24 @@ def zoom_str_mot(corrDf, zoomInterval = 0.5, which=1, filt_removal=1, mov_percen
         return rem.copy()
     else:
         return np.zeros(len(corrDf), dtype=bool)
+
+def computePerBite(derDf, fun, grouplabel = 'bite', background=0, **kwargs):
+    # Preallocate output array
+    array = np.full(len(derDf), np.nan)
+
+    # Loop over groups and fill in values directly
+    for _, group_indices in derDf.groupby(grouplabel).groups.items():
+        values = fun(derDf.loc[group_indices], **kwargs)
+        array[group_indices] = values  # assign per row
+    
+    # Fill background values
+    array[derDf[grouplabel] == background] = np.nan
+    return array
+
+
+def computeForAllBites(derDf, fun,  grouplabel = 'bite', background=0, **kwargs):
+    
+    array = fun(derDf, **kwargs)
+    # Fill background values
+    array[derDf[grouplabel] == background] = np.nan
+    return array
