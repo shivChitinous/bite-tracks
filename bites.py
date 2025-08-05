@@ -6,6 +6,7 @@ from scipy.signal import butter, filtfilt, hilbert
 from skimage.measure import label
 from skimage.morphology import closing, opening, erosion, dilation
 from scipy.stats import zscore
+from os import sep
 
 def derive(ldf,T,ctr='lab3',tip = 'lab1',
            window=0.1, #seconds
@@ -287,3 +288,30 @@ def computeForAllBites(derDf, fun,  grouplabel = 'bite', background=0, **kwargs)
     # Fill background values
     array[derDf[grouplabel] == background] = np.nan
     return array
+
+def corrDfConstruct(videoIdx, datasetDf, r1 = 1.25, r2 = 1.2, segment=2): 
+    vid_folder = datasetDf['path'].iloc[videoIdx]
+    filename = datasetDf['filename'].iloc[videoIdx]
+    legDf = pd.read_csv(sep.join([vid_folder,filename]),header=[1,2],index_col=0)
+    camera_fps = datasetDf['Frame rate (fps)'].iloc[videoIdx] #camera fps
+    n = len(legDf)
+    T = n/camera_fps
+
+    derDf = derive(legDf, T)
+
+    corrDf = pd.DataFrame(index=legDf.index, columns=['bite'])
+    corrDf['bite'] = derDf['bite']
+    corrDf['time [s]'] = legDf.index/camera_fps
+    corrDf['insert_length'] = computeForAllBites(derDf, insert_length)
+    corrDf['straightness'] = computeForAllBites(derDf, straightness)
+    corrDf['lab_angle'] = computePerBite(derDf, estimate_3d_labial_twist, r=r1, segment=segment)
+    corrDf['pal_angle'] = computePerBite(derDf, estimate_3d_palp_angle, r=r2, segment=segment)
+    corrDf['dPh'] = computeForAllBites(corrDf, deltaPhase)
+    if np.any(['gut' in derDf.columns.values[l][0] for l in range(len(derDf.columns.values))]):
+        corrDf['gl'] = gut_length(derDf)
+
+    corrDf['removal'] = computePerBite(corrDf, straightness_motion, dir = 'removal', filts = [50, 50, 251], threshold_netchange=0.01)
+    corrDf['insertion'] = computePerBite(corrDf, straightness_motion, dir = 'insertion', filts = [75, 50, 251], threshold_netchange=0.01)
+    corrDf['removal'] = corrDf['removal'].interpolate(method='nearest', limit_direction='both')
+    corrDf['insertion'] = corrDf['insertion'].interpolate(method='nearest', limit_direction='both')
+    return corrDf
