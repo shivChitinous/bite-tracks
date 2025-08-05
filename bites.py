@@ -72,10 +72,10 @@ def moving_average(x, window, T):
 def get_leg_time(derDf,T,mode='removal',window=0.05,variable='angle'):
     sign = +1 if mode=='removal' else -1
     if variable=='angle': 
-        v = angle_part(derDf,'tar')
+        v = derDf['lab_angle'].values
         height = 1
     elif variable=='straightness': 
-        v = straightness(derDf)
+        v = derDf['straightness'].values
         height = 0.03
     press_times = sp.signal.find_peaks(sign*np.diff(moving_average(v,window=window,T=T)),
         height=height,distance=10)
@@ -289,7 +289,7 @@ def computeForAllBites(derDf, fun,  grouplabel = 'bite', background=0, **kwargs)
     array[derDf[grouplabel] == background] = np.nan
     return array
 
-def corrDfConstruct(videoIdx, datasetDf, r1 = 1.25, r2 = 1.2, segment=2): 
+def corrDfConstruct(videoIdx, datasetDf, r1 = 1.25, r2 = 1.2, segment=2, **kwargs): 
     vid_folder = datasetDf['path'].iloc[videoIdx]
     filename = datasetDf['filename'].iloc[videoIdx]
     legDf = pd.read_csv(sep.join([vid_folder,filename]),header=[1,2],index_col=0)
@@ -310,8 +310,8 @@ def corrDfConstruct(videoIdx, datasetDf, r1 = 1.25, r2 = 1.2, segment=2):
     if np.any(['gut' in derDf.columns.values[l][0] for l in range(len(derDf.columns.values))]):
         corrDf['gl'] = gut_length(derDf)
 
-    corrDf['removal'] = computePerBite(corrDf, straightness_motion, dir = 'removal', filts = [50, 50, 251], threshold_netchange=0.01)
-    corrDf['insertion'] = computePerBite(corrDf, straightness_motion, dir = 'insertion', filts = [75, 50, 251], threshold_netchange=0.01)
+    corrDf['removal'] = computePerBite(corrDf, straightness_motion, dir = 'removal', filts = [50, 50, 251], threshold_netchange=0.01, **kwargs)
+    corrDf['insertion'] = computePerBite(corrDf, straightness_motion, dir = 'insertion', filts = [75, 50, 251], threshold_netchange=0.01, **kwargs)
     corrDf['removal'] = corrDf['removal'].interpolate(method='nearest', limit_direction='both')
     corrDf['insertion'] = corrDf['insertion'].interpolate(method='nearest', limit_direction='both')
     return corrDf
