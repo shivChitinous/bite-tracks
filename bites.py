@@ -7,6 +7,8 @@ from skimage.measure import label
 from skimage.morphology import closing, opening, erosion, dilation
 from scipy.stats import zscore
 from os import sep
+from scipy.special import digamma
+
 
 def derive(ldf,T,ctr='lab3',tip = 'lab1',
            window=0.1, #seconds
@@ -30,8 +32,8 @@ def derive(ldf,T,ctr='lab3',tip = 'lab1',
 
 
     for part in sorted(set(list(list(zip(*ldf.columns))[0])),key=list(list(zip(*ldf.columns)))[0].index):
-        df.loc[:,(part,'speed')] = 0
-        df.loc[:,(part,'norm_speed')] = 0
+        df.loc[:,(part,'speed')] = 0.0
+        df.loc[:,(part,'norm_speed')] = 0.0
     df.loc[:,(slice(None),'x')] = (df.loc[:,(slice(None),'x')].values)-(df.loc[:,(ctr,'x')].values.reshape(-1, 1))
     df.loc[:,(slice(None),'y')] = -((df.loc[:,(slice(None),'y')].values)-(df.loc[:,(ctr,'y')].values.reshape(-1, 1)))
     df.loc[:,(slice(None),'speed')] = np.sqrt((((df.loc[:,(slice(None),
@@ -218,7 +220,7 @@ def deltaPhase(corrDf, bandpass = [5, 20], signal1='lab_angle', signal2='pal_ang
         )
     
 def straightness_motion(corrDf, filts = [20, 20, 251], threshes = [-0.0001, 0.0005], dir = 'removal', phase = 'late', threshold_netchange = 0.01,
-                        phase_time = 0.8 #second
+                        phase_time = 1 #second
                         ):
     
     corrDf = corrDf.copy()
@@ -315,3 +317,26 @@ def corrDfConstruct(videoIdx, datasetDf, r1 = 1.25, r2 = 1.2, segment=2, **kwarg
     corrDf['removal'] = corrDf['removal'].interpolate(method='nearest', limit_direction='both')
     corrDf['insertion'] = corrDf['insertion'].interpolate(method='nearest', limit_direction='both')
     return corrDf
+
+
+def circ_entropy(theta, k=3):
+    t=np.asarray(theta,float)[:,None]; d=np.sqrt(2*(1-np.cos(t-t.T))); np.fill_diagonal(d,np.inf); rk=np.partition(d,k-1,1)[:,k-1]
+    B=(2/np.pi)*np.arcsin(np.sqrt((rk**2)/4))  
+    return float(np.mean(np.log(B)) + np.log(len(theta)*2*np.pi) - digamma(k))
+
+def circ_entropy_null(theta, L, K=1000, rng=np.random.default_rng(), wrap=False):
+    T = len(theta); s = rng.integers(0, T, K) if wrap else rng.integers(0, T-L+1, K)
+    idx = (s[:,None] + np.arange(L)) % T if wrap else s[:,None] + np.arange(L)
+    return np.array([circ_entropy(theta[i]) for i in idx])
+
+def pval_entropy_less(H_obs, Hk):
+    Hk = np.asarray(Hk); K = len(Hk)
+    return (1 + np.sum(Hk <= H_obs)) / (K + 1)
+
+def entropyBootstrapTest(theta_deg_segment, theta_deg_pool):
+    theta_rad_segment = np.deg2rad(theta_deg_segment)
+    theta_rad_pool = np.deg2rad(theta_deg_pool)
+    Hk = circ_entropy_null(theta_rad_pool, len(theta_rad_segment))
+    H_obs = circ_entropy(theta_rad_segment)
+    p_val = pval_entropy_less(H_obs, Hk)
+    return H_obs, p_val
