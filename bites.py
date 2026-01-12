@@ -337,6 +337,8 @@ def entropyBootstrapTest(theta_deg_segment, theta_deg_pool):
     theta_rad_segment = np.deg2rad(theta_deg_segment)
     theta_rad_pool = np.deg2rad(theta_deg_pool)
     Hk = circ_entropy_null(theta_rad_pool, len(theta_rad_segment))
+    H_mean = np.mean(Hk)
+    H_std = np.std(Hk)
     H_obs = circ_entropy(theta_rad_segment)
     p_val = pval_entropy_less(H_obs, Hk)
-    return H_obs, p_val
+    return H_mean, H_std, H_obs, p_val
